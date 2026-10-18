@@ -319,7 +319,7 @@ function dataView() {
     <section class="data-grid">
       <article class="panel data-panel"><div class="panel-heading"><div><p class="eyebrow">Histórico da planilha</p><h2>Importar arquivo Excel</h2><p>Importa os 12 meses, lançamentos datados, faturas, investimentos e dívidas reconhecidos. Linhas de exemplo não são tratadas como histórico.</p></div></div>
         <form id="workbook-form" class="stack-form"><label class="file-picker" for="workbookFile"><span class="file-picker-icon" aria-hidden="true">⇧</span><span><strong>Escolha a planilha .xlsx</strong><small>O arquivo é lido localmente no navegador.</small></span><input id="workbookFile" name="workbook" type="file" accept=".xlsx,.xls" /></label>
-          <label>Ano da planilha, usado somente quando não há datas<input name="fallbackYear" type="number" min="1900" max="2200" value="${new Date().getFullYear()}" /></label>
+          <label>Ano da importação: todas as datas da planilha serão ajustadas para este ano<input name="year" type="number" min="1900" max="2200" value="${new Date().getFullYear()}" /></label>
           <div id="import-preview" class="import-preview" aria-live="polite">${stagedWorkbook ? renderImportPreview(stagedWorkbook) : '<p>Após escolher o arquivo, você poderá revisar os registros antes de importar.</p>'}</div>
           <button class="button button-primary" type="submit" ${stagedWorkbook ? "" : "disabled"}>Importar sem substituir dados existentes</button>
         </form>
@@ -728,8 +728,8 @@ async function handleWorkbookSelect(event) {
   const preview = document.querySelector("#import-preview");
   preview.innerHTML = "<p>Lendo a planilha localmente…</p>";
   try {
-    const fallbackYear = Number(new FormData(event.currentTarget).get("fallbackYear"));
-    stagedWorkbook = await readLegacyWorkbook(file, { fallbackYear });
+    const year = Number(new FormData(event.currentTarget).get("year"));
+    stagedWorkbook = await readLegacyWorkbook(file, { year });
     render();
     showToast("Planilha analisada. Revise o resumo antes de importar.");
   } catch (error) {

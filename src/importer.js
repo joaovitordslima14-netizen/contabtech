@@ -133,8 +133,21 @@ function collectTaxonomy(workbook) {
   );
 }
 
-function readRecords(workbook, inferredYear, report) {
+const parseRawExcelDate = parseExcelDate;
+
+function withYear(date, year) {
+  if (!date) return date;
+  const [, month, day] = date.split("-");
+  const lastDay = new Date(Date.UTC(year, Number(month), 0)).getUTCDate();
+  return `${year}-${month}-${String(Math.min(Number(day), lastDay)).padStart(2, "0")}`;
+}
+
+function readRecords(workbook, inferredYear, report, forcedYear) {
   const imported = { transactions: [], invoices: [], debts: [], goals: {} };
+  const parseExcelDate = (value) => {
+    const date = parseRawExcelDate(value);
+    return forcedYear ? withYear(date, forcedYear) : date;
+  };
 
   for (const [sheetName, month] of MONTH_SHEETS) {
     const sheet = getSheet(workbook, sheetName);
@@ -351,10 +364,11 @@ function readRecords(workbook, inferredYear, report) {
   return imported;
 }
 
-export function parseLegacyWorkbook(workbook, { fallbackYear = new Date().getFullYear() } = {}) {
+export function parseLegacyWorkbook(workbook, { fallbackYear = new Date().getFullYear(), year } = {}) {
   const yearCounts = collectYearCandidates(workbook);
+  const forcedYear = year ? Number(year) : null;
   const inferredYear =
-    [...yearCounts].sort((left, right) => right[1] - left[1])[0]?.[0] || Number(fallbackYear);
+    forcedYear || [...yearCounts].sort((left, right) => right[1] - left[1])[0]?.[0] || Number(fallbackYear);
   if (!Number.isInteger(inferredYear) || inferredYear < 1900 || inferredYear > 2200) {
     throw new Error("Não foi possível identificar um ano válido para importar a planilha.");
   }
@@ -368,7 +382,7 @@ export function parseLegacyWorkbook(workbook, { fallbackYear = new Date().getFul
   comparisons: [],
   unavailableComparisons: [],
   };
-  const imported = readRecords(workbook, inferredYear, report);
+  const imported = readRecords(workbook, inferredYear, report, forcedYear);
   const base = emptyState();
   const taxonomy = mergeTaxonomy(base.taxonomy, collectTaxonomy(workbook));
 
