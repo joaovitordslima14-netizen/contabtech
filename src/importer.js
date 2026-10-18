@@ -1,0 +1,393 @@
+import ExcelJS from "exceljs";
+import { emptyState, getMonthSummary, mergeTaxonomy } from "./finance.js";
+
+const MONTH_SHEETS = [
+  ["Jan", 1],
+  ["Fev", 2],
+  ["Mar", 3],
+  ["Abr", 4],
+  ["Mai", 5],
+  ["Jun", 6],
+  ["Jul", 7],
+  ["Ago", 8],
+  ["Set", 9],
+  ["Out", 10],
+  ["Nov", 11],
+  ["Dez", 12],
+];
+
+const MONTH_BY_NAME = new Map(MONTH_SHEETS);
+
+function cellValue(sheet, address) {
+  if (typeof sheet?.getCell === "function") {
+    const value = sheet.getCell(address).value;
+    if (value && typeof value === "object") {
+      if ("result" in value) return value.result ?? "";
+      if (Array.isArray(value.richText)) return value.richText.map((part) => part.text).join("");
+      if ("text" in value) return value.text ?? "";
+    }
+    return value ?? "";
+  }
+  return sheet?.[address]?.v ?? "";
+}
+
+function getSheet(workbook, name) {
+  return workbook.Sheets?.[name] || workbook.getWorksheet?.(name);
+}
+
+function isExample(value) {
+  return typeof value === "string" && /^\s*exemplo\b/i.test(value);
+}
+
+export function parseExcelDate(value) {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const date = new Date(Date.UTC(1899, 11, 30) + Math.floor(value) * 86_400_000);
+    if (Number.isNaN(date.getTime())) return "";
+    return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+  }
+  if (typeof value === "string") {
+    const text = value.trim();
+    const local = text.match(/^(\d{1,2})[/.](\d{1,2})[/.](\d{4})$/);
+    if (local) return `${local[3]}-${local[2].padStart(2, "0")}-${local[1].padStart(2, "0")}`;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  }
+  return "";
+}
+
+function excelCents(value) {
+  const amount = Number(value);
+  return Number.isFinite(amount) ? Math.round(amount * 100) : 0;
+}
+
+function periodFor(year, month) {
+  return `${year}-${String(month).padStart(2, "0")}`;
+}
+
+function addSourceIdentity(record, sheetName, row, field) {
+  const identity = [
+    record.kind || field,
+    record.period,
+    record.date || "",
+    record.amountCents ?? record.installmentAmountCents ?? 0,
+    record.category || record.brand || record.creditor || record.description || "",
+    record.paymentMethod || "",
+    record.description || "",
+  ].join("|");
+  return {
+    ...record,
+    source: `${sheetName}!${field}${row}`,
+    sourceFingerprint: identity.toLocaleLowerCase("pt-BR"),
+  };
+}
+
+function collectYearCandidates(workbook) {
+  const counts = new Map();
+  for (const [sheetName] of MONTH_SHEETS) {
+    const sheet = getSheet(workbook, sheetName);
+    if (!sheet) continue;
+    const dateRanges = [
+      ["B", 15, 29],
+      ["L", 13, 43],
+      ["S", 13, 93],
+      ["E", 35, 46],
+      ["O", 54, 80],
+    ];
+    for (const [column, firstRow, lastRow] of dateRanges) {
+      for (let rowNumber = firstRow; rowNumber <= lastRow; rowNumber += 1) {
+        const date = parseExcelDate(cellValue(sheet, `${column}${rowNumber}`));
+        const year = Number(date.slice(0, 4));
+        if (year >= 1900 && year <= 2200) counts.set(year, (counts.get(year) || 0) + 1);
+      }
+    }
+  }
+  return counts;
+}
+
+function collectTaxonomy(workbook) {
+  const found = {
+    categories: [],
+    paymentMethods: [],
+    incomeTypes: [],
+    cardBrands: [],
+    debtTypes: [],
+  };
+
+  for (const [sheetName] of MONTH_SHEETS) {
+    const sheet = getSheet(workbook, sheetName);
+    if (!sheet) continue;
+    for (let row = 14; row <= 32; row += 1) found.categories.push(cellValue(sheet, `AC${row}`));
+    for (let row = 39; row <= 43; row += 1) found.paymentMethods.push(cellValue(sheet, `AC${row}`));
+    for (let row = 15; row <= 29; row += 1) found.incomeTypes.push(cellValue(sheet, `C${row}`));
+    for (let row = 35; row <= 46; row += 1) found.cardBrands.push(cellValue(sheet, `B${row}`));
+    for (let row = 54; row <= 80; row += 1) found.debtTypes.push(cellValue(sheet, `H${row}`));
+  }
+
+  return Object.fromEntries(
+    Object.entries(found).map(([key, values]) => [
+      key,
+      [...new Set(values.filter((value) => typeof value === "string" && value.trim()).map((value) => value.trim()))],
+    ]),
+  );
+}
+
+function readRecords(workbook, inferredYear, report) {
+  const imported = { transactions: [], invoices: [], debts: [], goals: {} };
+
+  for (const [sheetName, month] of MONTH_SHEETS) {
+    const sheet = getSheet(workbook, sheetName);
+    if (!sheet) continue;
+    const period = periodFor(inferredYear, month);
+
+    for (let row = 15; row <= 29; row += 1) {
+      const date = parseExcelDate(cellValue(sheet, `B${row}`));
+      const type = String(cellValue(sheet, `C${row}`)).trim();
+      const description = String(cellValue(sheet, `D${row}`)).trim();
+      const amountCents = excelCents(cellValue(sheet, `E${row}`));
+      if (isExample(type) || isExample(description)) {
+        report.skippedExamples += 1;
+        continue;
+      }
+      if (!amountCents) continue;
+      if (!date) {
+        report.undatedRecords += 1;
+        imported.transactions.push(
+          addSourceIdentity(
+            { kind: "income", period, date: "", amountCents, incomeType: type, description },
+            sheetName,
+            row,
+            "B",
+          ),
+        );
+        continue;
+      }
+      imported.transactions.push(
+        addSourceIdentity(
+          { kind: "income", period: date.slice(0, 7), date, amountCents, incomeType: type, description },
+          sheetName,
+          row,
+          "B",
+        ),
+      );
+    }
+
+    for (let row = 13; row <= 43; row += 1) {
+      const category = String(cellValue(sheet, `K${row}`)).trim();
+      const date = parseExcelDate(cellValue(sheet, `L${row}`));
+      const description = String(cellValue(sheet, `M${row}`)).trim();
+      const paymentMethod = String(cellValue(sheet, `N${row}`)).trim();
+      const paidValue = cellValue(sheet, `O${row}`);
+      const amountCents = excelCents(cellValue(sheet, `P${row}`));
+      if (isExample(description)) {
+        report.skippedExamples += 1;
+        continue;
+      }
+      if (!amountCents) continue;
+      const record = {
+        kind: "expense",
+        period: date ? date.slice(0, 7) : period,
+        date,
+        amountCents,
+        category,
+        description,
+        paymentMethod,
+        fixed: true,
+        paid: paidValue === true || Number(paidValue) === 1,
+      };
+      if (!date) report.undatedRecords += 1;
+      imported.transactions.push(addSourceIdentity(record, sheetName, row, "L"));
+    }
+
+    for (let row = 13; row <= 93; row += 1) {
+      const category = String(cellValue(sheet, `R${row}`)).trim();
+      const date = parseExcelDate(cellValue(sheet, `S${row}`));
+      const description = String(cellValue(sheet, `U${row}`)).trim();
+      const paymentMethod = String(cellValue(sheet, `V${row}`)).trim();
+      const amountCents = excelCents(cellValue(sheet, `W${row}`));
+      if (isExample(description)) {
+        report.skippedExamples += 1;
+        continue;
+      }
+      if (!amountCents) continue;
+      const record = {
+        kind: "expense",
+        period: date ? date.slice(0, 7) : period,
+        date,
+        amountCents,
+        category,
+        description,
+        paymentMethod,
+        fixed: false,
+        paid: true,
+        installments: cellValue(sheet, `T${row}`) || "",
+      };
+      if (!date) report.undatedRecords += 1;
+      imported.transactions.push(addSourceIdentity(record, sheetName, row, "S"));
+    }
+
+    for (let row = 37; row <= 48; row += 1) {
+      const location = String(cellValue(sheet, `H${row}`)).trim();
+      const amountCents = excelCents(cellValue(sheet, `I${row}`));
+      if (isExample(location)) {
+        report.skippedExamples += 1;
+        continue;
+      }
+      if (!location || !amountCents) continue;
+      imported.transactions.push(
+        addSourceIdentity(
+          { kind: "investment", period, date: "", amountCents, description: location },
+          sheetName,
+          row,
+          "I",
+        ),
+      );
+      report.undatedRecords += 1;
+    }
+
+    for (let row = 35; row <= 46; row += 1) {
+      const brand = String(cellValue(sheet, `B${row}`)).trim();
+      const paymentMethod = String(cellValue(sheet, `C${row}`)).trim();
+      const amountCents = excelCents(cellValue(sheet, `D${row}`));
+      const dueDate = parseExcelDate(cellValue(sheet, `E${row}`));
+      const paid = cellValue(sheet, `F${row}`) === true || Number(cellValue(sheet, `F${row}`)) === 1;
+      if (isExample(brand)) {
+        report.skippedExamples += 1;
+        continue;
+      }
+      if (!brand || (!dueDate && amountCents < 100 && !paid)) {
+        if (brand && amountCents > 0 && !dueDate && !paid) report.skippedSmallInvoicePlaceholders += 1;
+        continue;
+      }
+      const record = {
+        period,
+        brand,
+        paymentMethod,
+        amountCents,
+        dueDate,
+        paid,
+      };
+      imported.invoices.push(addSourceIdentity(record, sheetName, row, "D"));
+    }
+
+    for (let row = 54; row <= 80; row += 1) {
+      const type = String(cellValue(sheet, `H${row}`)).trim();
+      const paymentMethod = String(cellValue(sheet, `I${row}`)).trim();
+      const creditor = String(cellValue(sheet, `J${row}`)).trim();
+      const installmentAmountCents = excelCents(cellValue(sheet, `M${row}`));
+      const totalAmountCents = excelCents(cellValue(sheet, `N${row}`));
+      if (isExample(creditor)) {
+        report.skippedExamples += 1;
+        continue;
+      }
+      if (
+        !creditor ||
+        (!installmentAmountCents && !totalAmountCents)
+      ) {
+        continue;
+      }
+      const date = parseExcelDate(cellValue(sheet, `O${row}`));
+      const record = {
+        period,
+        type,
+        paymentMethod,
+        creditor,
+        currentInstallment: Number(cellValue(sheet, `K${row}`)) || 0,
+        totalInstallments: Number(cellValue(sheet, `L${row}`)) || 0,
+        installmentAmountCents,
+        totalAmountCents,
+        date,
+        paid: cellValue(sheet, `P${row}`) === true || Number(cellValue(sheet, `P${row}`)) === 1,
+      };
+      imported.debts.push(addSourceIdentity(record, sheetName, row, "J"));
+    }
+
+    const monthIndex = month - 1;
+    const goalColumn = String.fromCharCode(71 + monthIndex);
+    const goalCents = excelCents(cellValue(getSheet(workbook, "Investimentos"), `${goalColumn}9`));
+    if (goalCents) imported.goals[period] = goalCents;
+
+    const rawValues = ["B10", "C10", "D10", "E10"].map((address) => {
+      const value = cellValue(sheet, address);
+      return value === "" || typeof value === "string" && value.startsWith("#")
+        ? null
+        : excelCents(value);
+    });
+    if (rawValues[2] === null) {
+      let investido = 0;
+      for (let row = 37; row <= 48; row += 1) {
+        investido += excelCents(cellValue(sheet, `I${row}`));
+      }
+      rawValues[2] = investido;
+    }
+    if (rawValues.every((value) => value !== null)) {
+      const calculated = getMonthSummary(
+        {
+          transactions: imported.transactions,
+          invoices: imported.invoices,
+          debts: imported.debts,
+          goals: imported.goals,
+        },
+        period,
+      );
+      const actual = [
+        calculated.incomeCents,
+        calculated.expenseCents,
+        calculated.investmentCents,
+        calculated.balanceCents,
+      ];
+      report.comparisons.push({
+        period,
+        matches: rawValues.every((value, index) => value === actual[index]),
+        spreadsheet: rawValues,
+        imported: actual,
+      });
+    } else {
+      report.unavailableComparisons.push(period);
+    }
+  }
+
+  return imported;
+}
+
+export function parseLegacyWorkbook(workbook, { fallbackYear = new Date().getFullYear() } = {}) {
+  const yearCounts = collectYearCandidates(workbook);
+  const inferredYear =
+    [...yearCounts].sort((left, right) => right[1] - left[1])[0]?.[0] || Number(fallbackYear);
+  if (!Number.isInteger(inferredYear) || inferredYear < 1900 || inferredYear > 2200) {
+    throw new Error("Não foi possível identificar um ano válido para importar a planilha.");
+  }
+
+  const report = {
+    inferredYear,
+    yearCounts: Object.fromEntries(yearCounts),
+    undatedRecords: 0,
+  skippedExamples: 0,
+  skippedSmallInvoicePlaceholders: 0,
+  comparisons: [],
+  unavailableComparisons: [],
+  };
+  const imported = readRecords(workbook, inferredYear, report);
+  const base = emptyState();
+  const taxonomy = mergeTaxonomy(base.taxonomy, collectTaxonomy(workbook));
+
+  return {
+    ...imported,
+    taxonomy,
+    report: {
+      ...report,
+      transactionCount: imported.transactions.length,
+      invoiceCount: imported.invoices.length,
+      debtCount: imported.debts.length,
+      mismatchedPeriods: report.comparisons.filter((item) => !item.matches).map((item) => item.period),
+    },
+  };
+}
+
+export async function readLegacyWorkbook(file, options) {
+  const bytes = await file.arrayBuffer();
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(bytes);
+  return parseLegacyWorkbook(workbook, options);
+}
