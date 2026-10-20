@@ -1,4 +1,5 @@
 import "./style.css";
+import ExcelJS from "exceljs";
 import {
   CARD_BRANDS,
   CATEGORIES,
@@ -14,7 +15,7 @@ import {
   mergeTaxonomy,
   periodOf,
 } from "./finance.js";
-import { parseLegacyWorkbook, readLegacyWorkbook } from "./importer.js";
+import { createXlsxBackup, readXlsxBackupFile, readXlsxImportFile } from "./importer.js";
 import { loadState, openDatabase, saveState } from "./storage.js";
 
 const app = document.querySelector("#app");
@@ -317,16 +318,16 @@ function dataView() {
   const imported = state.transactions.filter((record) => record.sourceFingerprint).length;
   return `<section class="page-heading"><div><p class="eyebrow">Privacidade e portabilidade</p><h1>Dados e backup</h1><p>Seus registros ficam neste navegador. Nada é enviado para uma conta, servidor ou API.</p></div></section>
     <section class="data-grid">
-      <article class="panel data-panel"><div class="panel-heading"><div><p class="eyebrow">Histórico da planilha</p><h2>Importar arquivo Excel</h2><p>Importa os 12 meses, lançamentos datados, faturas, investimentos e dívidas reconhecidos. Linhas de exemplo não são tratadas como histórico.</p></div></div>
-        <form id="workbook-form" class="stack-form"><label class="file-picker" for="workbookFile"><span class="file-picker-icon" aria-hidden="true">⇧</span><span><strong>Escolha a planilha .xlsx</strong><small>O arquivo é lido localmente no navegador.</small></span><input id="workbookFile" name="workbook" type="file" accept=".xlsx,.xls" /></label>
-          <label>Ano da importação: todas as datas da planilha serão ajustadas para este ano<input name="year" type="number" min="1900" max="2200" value="${new Date().getFullYear()}" /></label>
+      <article class="panel data-panel"><div class="panel-heading"><div><p class="eyebrow">Histórico da planilha</p><h2>Importar arquivo Excel</h2><p>Importe a planilha contábil ou um XLSX de movimentações exportado pelo Contabtech.</p></div></div>
+        <form id="workbook-form" class="stack-form"><label class="file-picker" for="workbookFile"><span class="file-picker-icon" aria-hidden="true">⇧</span><span><strong>Escolha um arquivo .xlsx</strong><small>O arquivo é lido localmente no navegador.</small></span><input id="workbookFile" name="workbook" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" /></label>
+          <label>Ano da importação: todas as datas do arquivo serão ajustadas para este ano<input name="year" type="number" min="1900" max="2200" value="${new Date().getFullYear()}" /></label>
           <div id="import-preview" class="import-preview" aria-live="polite">${stagedWorkbook ? renderImportPreview(stagedWorkbook) : '<p>Após escolher o arquivo, você poderá revisar os registros antes de importar.</p>'}</div>
           <button class="button button-primary" type="submit" ${stagedWorkbook ? "" : "disabled"}>Importar sem substituir dados existentes</button>
         </form>
       </article>
-      <article class="panel data-panel"><div class="panel-heading"><div><p class="eyebrow">Cópia de segurança</p><h2>Exportar e restaurar</h2><p>O backup JSON inclui movimentações, faturas, dívidas, metas e categorias. ${imported ? `${imported} movimentações vieram de uma planilha.` : ""}</p></div></div>
-        <div class="backup-actions"><button class="button button-secondary" data-action="export-backup">Baixar backup JSON</button><button class="button button-secondary" data-action="export-csv">Exportar movimentações CSV</button></div>
-        <form id="backup-form" class="stack-form"><label class="file-picker" for="backupFile"><span class="file-picker-icon" aria-hidden="true">↻</span><span><strong>Selecionar backup JSON</strong><small>Escolha entre mesclar ou substituir após validar o arquivo.</small></span><input id="backupFile" name="backup" type="file" accept=".json,application/json" /></label><div id="backup-preview" class="import-preview" aria-live="polite">${stagedBackup ? renderBackupPreview(stagedBackup) : "<p>Nenhum backup selecionado.</p>"}</div><div class="backup-actions"><button class="button button-secondary" type="submit" name="mode" value="merge" ${stagedBackup ? "" : "disabled"}>Mesclar sem substituir</button><button class="button button-warning" type="submit" name="mode" value="replace" ${stagedBackup ? "" : "disabled"}>Substituir após confirmação</button></div></form>
+      <article class="panel data-panel"><div class="panel-heading"><div><p class="eyebrow">Cópia de segurança</p><h2>Exportar e restaurar</h2><p>O backup XLSX inclui movimentações, faturas, dívidas, metas e categorias. ${imported ? `${imported} movimentações vieram de uma planilha.` : ""}</p></div></div>
+        <div class="backup-actions"><button class="button button-secondary" data-action="export-backup">Baixar backup XLSX</button><button class="button button-secondary" data-action="export-xlsx">Exportar movimentações XLSX</button></div>
+        <form id="backup-form" class="stack-form"><label class="file-picker" for="backupFile"><span class="file-picker-icon" aria-hidden="true">↻</span><span><strong>Selecionar backup XLSX</strong><small>Escolha entre mesclar ou substituir após validar o arquivo.</small></span><input id="backupFile" name="backup" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" /></label><div id="backup-preview" class="import-preview" aria-live="polite">${stagedBackup ? renderBackupPreview(stagedBackup) : "<p>Nenhum backup selecionado.</p>"}</div><div class="backup-actions"><button class="button button-secondary" type="submit" name="mode" value="merge" ${stagedBackup ? "" : "disabled"}>Mesclar sem substituir</button><button class="button button-warning" type="submit" name="mode" value="replace" ${stagedBackup ? "" : "disabled"}>Substituir após confirmação</button></div></form>
       </article>
     </section>`;
 }
@@ -336,7 +337,7 @@ function renderImportPreview(result) {
   const matches = report.comparisons.filter((item) => item.matches).length;
   const mismatches = report.mismatchedPeriods.length;
   return `<div class="preview-stats"><strong>${report.transactionCount} movimentações</strong><strong>${report.invoiceCount} faturas</strong><strong>${report.debtCount} dívidas</strong><strong>Ano identificado: ${report.inferredYear}</strong></div>
-    <p>${matches} meses conferidos com os totais da planilha.${mismatches ? ` ${mismatches} mês(es) apresentam diferença; revise antes de continuar.` : ""}</p>
+    <p>${report.sourceFormat === "XLSX" || report.sourceFormat === "XLSX Backup" ? "Conteúdo da planilha XLSX pronto para importar." : `${matches} meses conferidos com os totais da planilha.${mismatches ? ` ${mismatches} mês(es) apresentam diferença; revise antes de continuar.` : ""}`}</p>
     ${report.undatedRecords ? `<p class="warning-copy">${report.undatedRecords} registro(s) sem dia foram associados ao mês da aba. A data pode ser corrigida depois.</p>` : ""}
     ${report.skippedExamples ? `<p class="muted-copy">${report.skippedExamples} linha(s) de demonstração foram ignoradas.</p>` : ""}
     ${mismatches ? `<ul class="mismatch-list">${report.comparisons.filter((item) => !item.matches).map((item) => `<li>${esc(item.period)}: planilha ${item.spreadsheet.map((value) => formatMoney(value)).join(" / ")}; importação ${item.imported.map((value) => formatMoney(value)).join(" / ")}</li>`).join("")}</ul>` : ""}`;
@@ -476,11 +477,11 @@ async function handleAction(event) {
       return;
     }
     if (action === "export-backup") {
-      exportBackup();
+      await exportBackup();
       return;
     }
-    if (action === "export-csv") {
-      exportTransactionsCsv();
+    if (action === "export-xlsx") {
+      await exportTransactionsXlsx();
     }
   } catch (error) {
     showToast(error instanceof Error ? error.message : "A operação não pôde ser concluída.", "error");
@@ -726,15 +727,15 @@ async function handleWorkbookSelect(event) {
   const file = event.target.files?.[0];
   if (!file) return;
   const preview = document.querySelector("#import-preview");
-  preview.innerHTML = "<p>Lendo a planilha localmente…</p>";
+  preview.innerHTML = "<p>Lendo o arquivo localmente…</p>";
   try {
     const year = Number(new FormData(event.currentTarget).get("year"));
-    stagedWorkbook = await readLegacyWorkbook(file, { year });
+    stagedWorkbook = await readXlsxImportFile(file, { year });
     render();
-    showToast("Planilha analisada. Revise o resumo antes de importar.");
+    showToast("Arquivo analisado. Revise o resumo antes de importar.");
   } catch (error) {
     stagedWorkbook = null;
-    preview.textContent = error instanceof Error ? error.message : "Não foi possível ler esta planilha.";
+    preview.textContent = error instanceof Error ? error.message : "Não foi possível ler este arquivo.";
     preview.className = "import-preview error-copy";
   }
 }
@@ -796,14 +797,13 @@ async function handleBackupSelect(event) {
   if (!file) return;
   const preview = document.querySelector("#backup-preview");
   try {
-    const text = await file.text();
-    const parsed = JSON.parse(text);
+    const parsed = await readXlsxBackupFile(file);
     stagedBackup = validateBackup(parsed);
     render();
-    showToast("Backup válido. Escolha se deseja mesclar ou substituir.");
+    showToast("Backup XLSX válido. Escolha se deseja mesclar ou substituir.");
   } catch (error) {
     stagedBackup = null;
-    preview.textContent = error instanceof Error ? error.message : "Não foi possível ler o backup.";
+    preview.textContent = error instanceof Error ? error.message : "Não foi possível ler o backup XLSX.";
     preview.className = "import-preview error-copy";
   }
 }
@@ -869,48 +869,60 @@ function mergeBackupData(incoming) {
   state.taxonomy = mergeTaxonomy(state.taxonomy, incoming.taxonomy || {});
 }
 
-function exportBackup() {
-  const backup = {
-    application: "Contabtech Finanças",
+async function exportBackup() {
+  const backupData = {
     schemaVersion: 1,
-    exportedAt: new Date().toISOString(),
-    data: {
-      schemaVersion: 1,
-      transactions: state.transactions,
-      invoices: state.invoices,
-      debts: state.debts,
-      goals: state.goals,
-      taxonomy: state.taxonomy,
-    },
+    transactions: state.transactions,
+    invoices: state.invoices,
+    debts: state.debts,
+    goals: state.goals,
+    taxonomy: state.taxonomy,
   };
+  const bytes = await createXlsxBackup(backupData);
   downloadFile(
-    `contabtech-backup-${todayString()}.json`,
-    JSON.stringify(backup, null, 2),
-    "application/json;charset=utf-8",
+    `contabtech-backup-${todayString()}.xlsx`,
+    bytes,
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   );
 }
 
-function exportTransactionsCsv() {
-  const rows = [
-    ["Período", "Data", "Tipo", "Categoria/tipo", "Descrição", "Forma de pagamento", "Fixa", "Paga", "Valor (BRL)"],
-    ...state.transactions.map((record) => [
-      periodOf(record),
-      record.date || "",
-      recordKindLabel(record),
-      record.category || record.incomeType || "",
-      record.description || "",
-      record.paymentMethod || "",
-      record.fixed ? "Sim" : "Não",
-      record.paid === false ? "Não" : "Sim",
-      (record.amountCents / 100).toFixed(2).replace(".", ","),
-    ]),
+async function exportTransactionsXlsx() {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = "Contabtech";
+  const worksheet = workbook.addWorksheet("Movimentações");
+  worksheet.columns = [
+    { header: "Período", key: "period", width: 12 },
+    { header: "Data", key: "date", width: 14 },
+    { header: "Tipo", key: "type", width: 18 },
+    { header: "Categoria/tipo", key: "category", width: 22 },
+    { header: "Descrição", key: "description", width: 32 },
+    { header: "Forma de pagamento", key: "paymentMethod", width: 22 },
+    { header: "Fixa", key: "fixed", width: 10 },
+    { header: "Paga", key: "paid", width: 10 },
+    { header: "Valor (BRL)", key: "amount", width: 16 },
   ];
-  const csv = `\uFEFF${rows.map((row) => row.map(csvCell).join(";")).join("\r\n")}`;
-  downloadFile(`contabtech-movimentacoes-${todayString()}.csv`, csv, "text/csv;charset=utf-8");
-}
-
-function csvCell(value) {
-  return `"${String(value ?? "").replace(/"/g, '""')}"`;
+  for (const record of state.transactions) {
+    worksheet.addRow({
+      period: periodOf(record),
+      date: record.date || "",
+      type: recordKindLabel(record),
+      category: record.category || record.incomeType || "",
+      description: record.description || "",
+      paymentMethod: record.paymentMethod || "",
+      fixed: record.fixed ? "Sim" : "Não",
+      paid: record.paid === false ? "Não" : "Sim",
+      amount: record.amountCents / 100,
+    });
+  }
+  worksheet.getRow(1).font = { bold: true };
+  worksheet.autoFilter = { from: "A1", to: "I1" };
+  worksheet.views = [{ state: "frozen", ySplit: 1 }];
+  const bytes = await workbook.xlsx.writeBuffer();
+  downloadFile(
+    `contabtech-movimentacoes-${todayString()}.xlsx`,
+    bytes,
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  );
 }
 
 function downloadFile(name, content, type) {

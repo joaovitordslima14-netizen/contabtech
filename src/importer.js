@@ -399,9 +399,232 @@ export function parseLegacyWorkbook(workbook, { fallbackYear = new Date().getFul
   };
 }
 
-export async function readLegacyWorkbook(file, options) {
+function normalizeHeader(value) {
+  return String(value)
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase("pt-BR");
+}
+
+function parseXlsxAmount(value) {
+  if (typeof value === "number") return Number.isFinite(value) ? Math.round(value * 100) : null;
+  let text = String(value ?? "").trim().replace(/^R\$\s*/i, "").replace(/\s/g, "");
+  if (text.startsWith("(") && text.endsWith(")")) text = `-${text.slice(1, -1)}`;
+  if (text.includes(",")) text = text.replace(/\./g, "").replace(",", ".");
+  const amount = Number(text);
+  return Number.isFinite(amount) ? Math.round(amount * 100) : null;
+}
+
+function spreadsheetBoolean(value) {
+  return ["sim", "true", "1", "s"].includes(normalizeHeader(value));
+}
+
+export function parseTransactionsWorksheet(sheet, { fallbackYear = new Date().getFullYear(), year } = {}) {
+  const rows = [];
+  sheet.eachRow({ includeEmpty: false }, (row) => {
+    rows.push(row.values.slice(1).map((value) => value ?? ""));
+  });
+  if (rows.length < 2) throw new Error("A planilha está vazia ou não contém movimentações.");
+
+  const headers = rows[0].map(normalizeHeader);
+  const columns = {
+    period: headers.indexOf("periodo"),
+    date: headers.indexOf("data"),
+    type: headers.indexOf("tipo"),
+    category: headers.indexOf("categoria/tipo"),
+    description: headers.indexOf("descricao"),
+    paymentMethod: headers.indexOf("forma de pagamento"),
+    fixed: headers.indexOf("fixa"),
+    paid: headers.indexOf("paga"),
+    amount: headers.findIndex((header) => ["valor (brl)", "valor (r$)", "valor"].includes(header)),
+  };
+  if (
+    columns.type < 0 ||
+    columns.amount < 0 ||
+    (columns.period < 0 && columns.date < 0)
+  ) {
+    throw new Error("Planilha incompatível. Use o XLSX de movimentações exportado pelo Contabtech.");
+  }
+
+  const forcedYear = year ? Number(year) : null;
+  if (
+    (forcedYear && (!Number.isInteger(forcedYear) || forcedYear < 1900 || forcedYear > 2200)) ||
+    (!forcedYear && (!Number.isInteger(Number(fallbackYear)) || fallbackYear < 1900 || fallbackYear > 2200))
+  ) {
+    throw new Error("Não foi possível identificar um ano válido para importar a planilha.");
+  }
+  const imported = { transactions: [], invoices: [], debts: [], goals: {} };
+  const yearCounts = new Map();
+  let undatedRecords = 0;
+
+  for (const [index, values] of rows.slice(1).entries()) {
+    const valueAt = (column) => (column < 0 ? "" : values[column] ?? "");
+    const type = normalizeHeader(valueAt(columns.type));
+    const kind =
+      type === "entrada" ? "income" :
+      type === "investimento" ? "investment" :
+      type === "saida fixa" || type === "despesa fixa" ? "expense" :
+      type === "saida variavel" || type === "despesa variavel" || type === "saida" || type === "despesa" ? "expense" :
+      null;
+    if (!kind) throw new Error(`Tipo de movimentação inválido na linha ${index + 2} da planilha.`);
+
+    const amountCents = parseXlsxAmount(valueAt(columns.amount));
+    if (amountCents === null || amountCents <= 0) {
+      throw new Error(`Valor inválido na linha ${index + 2} da planilha.`);
+    }
+    const dateValue = valueAt(columns.date);
+    const rawDate = parseExcelDate(dateValue);
+    if (String(dateValue).trim() && !rawDate) {
+      throw new Error(`Data inválida na linha ${index + 2} da planilha.`);
+    }
+    const rawPeriod = String(valueAt(columns.period)).trim();
+    const periodMatch = rawPeriod.match(/^(\d{4})-(\d{2})$/);
+    if (rawPeriod && (!periodMatch || Number(periodMatch[2]) < 1 || Number(periodMatch[2]) > 12)) {
+      throw new Error(`Período inválido na linha ${index + 2} da planilha.`);
+    }
+    const sourceYear = rawDate
+      ? Number(rawDate.slice(0, 4))
+      : periodMatch
+        ? Number(periodMatch[1])
+        : forcedYear || Number(fallbackYear);
+    if (sourceYear < 1900 || sourceYear > 2200) {
+      throw new Error(`Ano inválido na linha ${index + 2} da planilha.`);
+    }
+    yearCounts.set(sourceYear, (yearCounts.get(sourceYear) || 0) + 1);
+    const effectiveYear = forcedYear || sourceYear;
+    const date = rawDate ? withYear(rawDate, effectiveYear) : "";
+    const period = date
+      ? date.slice(0, 7)
+      : `${effectiveYear}-${String(Number(periodMatch?.[2]) || 1).padStart(2, "0")}`;
+    const fixedValue = valueAt(columns.fixed);
+    const fixed = kind === "expense" && (String(fixedValue).trim() ? spreadsheetBoolean(fixedValue) : type.includes("fixa"));
+    const category = String(valueAt(columns.category)).trim();
+    const description = String(valueAt(columns.description)).trim();
+    const paymentMethod = String(valueAt(columns.paymentMethod)).trim();
+
+    imported.transactions.push({
+      kind,
+      period,
+      date,
+      amountCents,
+      ...(kind === "income" ? { incomeType: category } : {}),
+      ...(kind === "expense" ? { category, fixed, paid: spreadsheetBoolean(valueAt(columns.paid)) } : {}),
+      ...(kind === "investment" ? {} : { paymentMethod }),
+      description,
+    });
+    if (!date) undatedRecords += 1;
+  }
+
+  const inferredYear =
+    forcedYear ||
+    [...yearCounts].sort((left, right) => right[1] - left[1])[0]?.[0] ||
+    Number(fallbackYear);
+  return {
+    ...imported,
+    taxonomy: emptyState().taxonomy,
+    report: {
+      sourceFormat: "XLSX",
+      inferredYear,
+      yearCounts: Object.fromEntries(yearCounts),
+      undatedRecords,
+      skippedExamples: 0,
+      skippedSmallInvoicePlaceholders: 0,
+      comparisons: [],
+      unavailableComparisons: [],
+      transactionCount: imported.transactions.length,
+      invoiceCount: 0,
+      debtCount: 0,
+      mismatchedPeriods: [],
+    },
+  };
+}
+
+export async function createXlsxBackup(data) {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = "Contabtech";
+  const sheet = workbook.addWorksheet("Backup");
+  const serialized = JSON.stringify(data);
+  sheet.addRow(["Contabtech Finanças XLSX", 1, new Date().toISOString()]);
+  sheet.addRow(["Dados"]);
+  for (let offset = 0; offset < serialized.length; offset += 30000) {
+    sheet.addRow([serialized.slice(offset, offset + 30000)]);
+  }
+  return workbook.xlsx.writeBuffer();
+}
+
+export function parseXlsxBackup(workbook) {
+  const sheet = workbook.getWorksheet("Backup");
+  if (sheet?.getCell("A1").value !== "Contabtech Finanças XLSX" || Number(sheet.getCell("B1").value) !== 1) {
+    throw new Error("Arquivo XLSX de backup inválido ou versão não compatível.");
+  }
+  const chunks = [];
+  sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+    if (rowNumber >= 3 && row.getCell(1).value) chunks.push(String(row.getCell(1).value));
+  });
+  if (!chunks.length) throw new Error("O arquivo XLSX não contém os dados do backup.");
+  let data;
+  try {
+    data = JSON.parse(chunks.join(""));
+  } catch (error) {
+    throw new Error("Não foi possível decodificar os dados do backup XLSX.", { cause: error });
+  }
+  return {
+    application: "Contabtech Finanças",
+    schemaVersion: 1,
+    exportedAt: String(sheet.getCell("C1").value || ""),
+    data,
+  };
+}
+
+export async function readXlsxBackupFile(file) {
+  if (!file.name.toLocaleLowerCase("pt-BR").endsWith(".xlsx")) {
+    throw new Error("Selecione um arquivo no formato .xlsx.");
+  }
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(await file.arrayBuffer());
+  return parseXlsxBackup(workbook);
+}
+
+export async function readXlsxImportFile(file, options) {
+  if (!file.name.toLocaleLowerCase("pt-BR").endsWith(".xlsx")) {
+    throw new Error("Selecione um arquivo no formato .xlsx.");
+  }
   const bytes = await file.arrayBuffer();
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(bytes);
+  if (workbook.getWorksheet("Backup")) {
+    const backup = parseXlsxBackup(workbook);
+    const data = backup.data;
+    if (
+      !Array.isArray(data.transactions) ||
+      !Array.isArray(data.invoices) ||
+      !Array.isArray(data.debts) ||
+      !data.goals ||
+      typeof data.goals !== "object"
+    ) {
+      throw new Error("Arquivo XLSX de backup inválido ou incompleto.");
+    }
+    const year = Number(data.transactions[0]?.period?.slice(0, 4)) || new Date().getFullYear();
+    return {
+      ...data,
+      report: {
+        sourceFormat: "XLSX Backup",
+        inferredYear: year,
+        yearCounts: {},
+        undatedRecords: 0,
+        skippedExamples: 0,
+        skippedSmallInvoicePlaceholders: 0,
+        comparisons: [],
+        unavailableComparisons: [],
+        transactionCount: data.transactions.length,
+        invoiceCount: data.invoices.length,
+        debtCount: data.debts.length,
+        mismatchedPeriods: [],
+      },
+    };
+  }
+  const transactionsSheet = workbook.getWorksheet("Movimentações");
+  if (transactionsSheet) return parseTransactionsWorksheet(transactionsSheet, options);
   return parseLegacyWorkbook(workbook, options);
 }

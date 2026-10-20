@@ -46,7 +46,7 @@ Os planos gratuitos e seus limites são definidos por cada provedor e podem muda
 - **Android (Chrome):** abra o link → menu ⋮ → **Instalar app**.
 - **iPhone/iPad (Safari):** abra o link → **Compartilhar → Adicionar à Tela de Início**.
 
-Instale e abra o app uma vez com internet para que ele seja guardado para uso offline. **Importante:** cada aparelho/navegador tem seus próprios dados. Para levar dados do computador para o celular, use o backup JSON (veja abaixo) e guarde backups periodicamente; limpar os dados do navegador apaga o banco local.
+Instale e abra o app uma vez com internet para que ele seja guardado para uso offline. **Importante:** cada aparelho/navegador tem seus próprios dados. Para levar dados do computador para o celular, use o backup XLSX (veja abaixo) e guarde backups periodicamente; limpar os dados do navegador apaga o banco local.
 
 ## Instalação e funcionamento offline
 
@@ -54,7 +54,7 @@ Instale e abra o app uma vez com internet para que ele seja guardado para uso of
 - No Android, abra o endereço HTTPS no Chrome e escolha **Instalar app** ou **Adicionar à tela inicial**. No iPhone/iPad, use **Compartilhar → Adicionar à Tela de Início** no Safari.
 - A instalação PWA em celular exige que os arquivos estáticos estejam em um endereço HTTPS. O aplicativo não inclui hospedagem; uma hospedagem estática gratuita pode ser usada, mas os termos e a disponibilidade de terceiros podem mudar.
 - Depois do primeiro carregamento, o service worker mantém a interface em cache para uso offline. Os dados ficam no perfil do navegador de cada dispositivo. O computador não precisa permanecer ligado depois que o aplicativo estiver instalado.
-- Não há sincronização entre aparelhos. Use backup JSON para transferir ou recuperar dados. O backup contém informações financeiras e deve ser guardado em local privado.
+- Não há sincronização entre aparelhos. Use o backup XLSX para transferir ou recuperar dados. O backup contém informações financeiras e deve ser guardado em local privado.
 
 ## Importar a planilha
 
@@ -63,6 +63,8 @@ Instale e abra o app uma vez com internet para que ele seja guardado para uso of
 3. Confirme **Importar sem substituir dados existentes**.
 
 O leitor reconhece as 12 abas mensais, os lançamentos de entrada, saídas fixas/variáveis, faturas, investimentos e dívidas/parcelas. Datas Excel são convertidas para `AAAA-MM-DD`; linhas sem dia ficam associadas ao mês da aba e podem ser corrigidas depois. Registros repetidos na mesma importação ou em importações futuras são ignorados, nunca sobrescritos. A aba `Exemplo` e linhas nomeadas como demonstração não são importadas. Pequenos valores de fatura sem vencimento e sem indicação de pagamento também são tratados como placeholders da planilha.
+
+Também é possível importar um XLSX de movimentações exportado pelo próprio Contabtech. Ele importa entradas, saídas e investimentos; faturas, dívidas e metas são importadas a partir da planilha contábil original.
 
 O importador compara entradas, saídas, investimentos e saldo com os resultados calculados nas abas mensais. A planilha contém uma fórmula `#REF!` em `MENU!H51`; ela não é usada como referência para os totais do aplicativo. Diferenças são mostradas antes da confirmação.
 
@@ -86,11 +88,11 @@ As categorias e opções reconhecidas na planilha incluem: Bobeira, Alimentaçã
 - Use **＋ Lançamento** para registrar entrada, saída ou investimento. A data começa no dia atual; mês e ano são editáveis no topo. Despesas fixas têm estado de pagamento; esse estado afeta o saldo mensal. Um lançamento manual idêntico na mesma data pede confirmação antes de ser repetido.
 - Navegue entre meses e anos sem alterar os dados dos demais períodos. Editar e excluir recalcula os indicadores na hora; exclusões pedem confirmação.
 - Faturas e dívidas/parcelas têm telas próprias e não alteram o saldo. Parcelas aparecem na distribuição por forma de pagamento, conforme a fórmula mensal da planilha.
-- Em **Dados e backup**, **Baixar backup JSON** salva todas as coleções e configurações. CSV exporta as movimentações financeiras para uso em Excel ou outro programa.
+- Em **Dados e backup**, **Exportar movimentações XLSX** gera uma planilha Excel que pode ser importada novamente no aplicativo. **Baixar backup XLSX** salva todas as coleções e configurações para restauração completa.
 - Restaurar permite mesclar dados sem substituir registros ou substituir o conjunto atual mediante confirmação explícita. Faça backup antes de substituir.
 
 ## Dados, privacidade e custos
 
-O projeto não faz chamadas de rede para enviar registros. O XLSX é processado localmente com ExcelJS (MIT); o Vite é usado apenas para desenvolvimento/build. Não há serviços pagos, cobrança por uso ou infraestrutura obrigatória no aplicativo. O armazenamento do navegador não é uma cópia de segurança e não é sincronizado; dados podem ser perdidos se o perfil/navegador for removido, então mantenha backups periódicos. IndexedDB não substitui criptografia do dispositivo: proteja o acesso ao seu usuário e ao arquivo de backup.
+O projeto não faz chamadas de rede para enviar registros. Os arquivos XLSX são processados localmente com ExcelJS (MIT); o Vite é usado apenas para desenvolvimento/build. Não há serviços pagos, cobrança por uso ou infraestrutura obrigatória no aplicativo. O armazenamento do navegador não é uma cópia de segurança e não é sincronizado; dados podem ser perdidos se o perfil/navegador for removido, então mantenha backups periódicos. IndexedDB não substitui criptografia do dispositivo: proteja o acesso ao seu usuário e ao arquivo de backup.
 
 Hospedagem HTTPS para disponibilizar a instalação em outro aparelho é opcional e não faz parte deste repositório. O custo e a continuidade de qualquer hospedagem externa dependem do provedor escolhido; o aplicativo continua sem serviço de nuvem e sem sincronização.
