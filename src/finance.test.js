@@ -7,7 +7,21 @@ import {
   getMonthSummary,
   getYearSummary,
   periodOf,
+  syncPaymentTransaction,
 } from "./finance.js";
+
+test("marcar parcela como paga cria saída vinculada e desmarcar remove", () => {
+  const state = emptyState();
+  const debt = { id: "d1", creditor: "Loja", installmentAmountCents: 5000, currentInstallment: 2, totalInstallments: 10, paymentMethod: "Crédito", paid: true };
+  syncPaymentTransaction(state, "debt", debt, "2025-03-10");
+  syncPaymentTransaction(state, "debt", debt, "2025-03-11");
+  assert.equal(state.transactions.length, 1);
+  assert.equal(state.transactions[0].amountCents, 5000);
+  assert.equal(state.transactions[0].description, "Loja (parcela 2/10)");
+  debt.paid = false;
+  syncPaymentTransaction(state, "debt", debt, "2025-03-10");
+  assert.equal(state.transactions.length, 0);
+});
 
 test("converte valores de reais para centavos sem erro de ponto flutuante", () => {
   assert.equal(amountToCents("12,34"), 1234);

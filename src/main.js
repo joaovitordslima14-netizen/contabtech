@@ -14,6 +14,7 @@ import {
   getYearSummary,
   mergeTaxonomy,
   periodOf,
+  syncPaymentTransaction,
 } from "./finance.js";
 import { createXlsxBackup, readXlsxBackupFile, readXlsxImportFile } from "./importer.js";
 import {
@@ -242,7 +243,7 @@ function cardList(items, emptyText) {
         <div class="record-card-heading"><div><span class="record-eyebrow">${esc(record.kind || record.type || record.brand || "Registro")}</span><h3>${esc(record.creditor || record.brand || record.description || "Sem descrição")}</h3></div><strong>${formatMoney(record.amountCents ?? record.totalAmountCents ?? 0)}</strong></div>
         <p>${esc(record.paymentMethod || "Forma não informada")}${record.dueDate ? ` · vence ${dateLabel(record.dueDate)}` : record.date ? ` · ${dateLabel(record.date)}` : ""}</p>
         ${record.paid === false ? '<span class="status-chip">Em aberto</span>' : record.paid === true ? '<span class="status-chip status-paid">Pago</span>' : ""}
-        <div class="record-actions"><button class="text-button" data-action="edit-record" data-kind="${esc(record._kind)}" data-id="${esc(record.id)}">Editar</button><button class="text-button danger-text" data-action="delete-record" data-kind="${esc(record._kind)}" data-id="${esc(record.id)}">Excluir</button></div>
+        <div class="record-actions"><button class="text-button" data-action="toggle-paid" data-kind="${esc(record._kind)}" data-id="${esc(record.id)}">${record.paid ? "Desfazer pagamento" : "Marcar como paga"}</button><button class="text-button" data-action="edit-record" data-kind="${esc(record._kind)}" data-id="${esc(record.id)}">Editar</button><button class="text-button danger-text" data-action="delete-record" data-kind="${esc(record._kind)}" data-id="${esc(record.id)}">Excluir</button></div>
       </article>`,
     )
     .join("")}</div>`;
@@ -479,13 +480,17 @@ async function handleAction(event) {
       openSupplementDialog(button.dataset.kind);
       return;
     }
-    if (action === "edit-record" || action === "delete-record") {
+    if (action === "edit-record" || action === "delete-record" || action === "toggle-paid") {
       const kind = button.dataset.kind;
       const collection = kind === "invoice" ? "invoices" : "debts";
       const record = state[collection].find((item) => item.id === button.dataset.id);
       if (!record) return;
       if (action === "edit-record") openSupplementDialog(kind, record);
-      else if (window.confirm(`Excluir "${record.creditor || record.brand}"?`)) {
+      else if (action === "toggle-paid") {
+        record.paid = !record.paid;
+        const payment = syncPaymentTransaction(state, kind, record, todayString());
+        await persist(payment ? "Marcado como pago; saída criada nas movimentações." : "Pagamento desfeito; saída removida das movimentações.");
+      } else if (window.confirm(`Excluir "${record.creditor || record.brand}"?`)) {
         state[collection] = state[collection].filter((item) => item.id !== record.id);
         await persist("Registro excluído.");
       }
@@ -724,7 +729,12 @@ async function handleSupplementSubmit(event) {
     delete record.sourceFingerprint;
     if (existing) state[collection] = state[collection].map((item) => (item.id === id ? record : item));
     else state[collection].push(record);
-    await persist(existing ? "Registro atualizado." : "Registro salvo.");
+    const payment = syncPaymentTransaction(state, kind, record, todayString());
+    await persist(
+      payment && !existing?.paid
+        ? "Registro salvo e saída criada nas movimentações."
+        : existing ? "Registro atualizado." : "Registro salvo.",
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : "Não foi possível salvar este registro.";
     const errorNode = document.querySelector("#supplementError");

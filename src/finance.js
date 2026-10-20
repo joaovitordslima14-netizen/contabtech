@@ -102,6 +102,47 @@ export function sumCents(items, select = (item) => item.amountCents) {
   return items.reduce((sum, item) => sum + (Number(select(item)) || 0), 0);
 }
 
+// Mantém uma saída vinculada a faturas/parcelas: criada ao marcar como paga e removida ao desmarcar.
+export function syncPaymentTransaction(state, kind, record, date) {
+  const existing = state.transactions.find((item) => item.linkedId === record.id);
+  if (!record.paid) {
+    if (existing) state.transactions = state.transactions.filter((item) => item !== existing);
+    return null;
+  }
+
+  const invoice = kind === "invoice";
+  const installment = record.totalInstallments
+    ? ` (parcela ${record.currentInstallment || "?"}/${record.totalInstallments})`
+    : "";
+  const amountCents = invoice
+    ? record.amountCents
+    : record.installmentAmountCents || record.totalAmountCents;
+  const fields = {
+    kind: "expense",
+    amountCents,
+    category: "Contas",
+    description: invoice ? `Fatura ${record.brand}` : `${record.creditor}${installment}`,
+    paymentMethod: record.paymentMethod || "",
+    fixed: false,
+    paid: true,
+    linkedId: record.id,
+    linkedKind: kind,
+  };
+
+  if (existing) {
+    Object.assign(existing, fields);
+    return existing;
+  }
+  const transaction = {
+    ...fields,
+    id: globalThis.crypto.randomUUID(),
+    date,
+    period: date.slice(0, 7),
+  };
+  state.transactions.push(transaction);
+  return transaction;
+}
+
 export function getMonthSummary(state, period) {
   const transactions = state.transactions.filter((record) => periodOf(record) === period);
   const incomes = transactions.filter((record) => record.kind === "income");
@@ -130,6 +171,8 @@ export function getMonthSummary(state, period) {
 
   for (const debt of debts) {
     if (!debt.paymentMethod || !debt.installmentAmountCents) continue;
+    // A parcela paga já aparece como saída vinculada; evita contá-la duas vezes.
+    if (state.transactions.some((record) => record.linkedId === debt.id)) continue;
     paymentMethods.set(
       debt.paymentMethod,
       (paymentMethods.get(debt.paymentMethod) || 0) + debt.installmentAmountCents,
