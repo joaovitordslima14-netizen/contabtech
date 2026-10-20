@@ -10,6 +10,7 @@
     "test": "node --test"
   },
   "dependencies": {
+    "@supabase/supabase-js": "2.118.0",
     "exceljs": "4.4.0"
   },
   "overrides": {

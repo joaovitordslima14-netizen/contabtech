@@ -16,6 +16,15 @@ import {
   periodOf,
 } from "./finance.js";
 import { createXlsxBackup, readXlsxBackupFile, readXlsxImportFile } from "./importer.js";
+import {
+  getSession,
+  isCloudConfigured,
+  loadCloudState,
+  saveCloudState,
+  signIn,
+  signOut,
+  signUp,
+} from "./cloud.js";
 import { loadState, openDatabase, saveState } from "./storage.js";
 
 const app = document.querySelector("#app");
@@ -32,6 +41,8 @@ const PAGE_LABELS = {
 let database;
 let state;
 let lastPersistedState;
+let session = null;
+let cloudVersion = null;
 let selectedYear = today.getFullYear();
 let selectedMonth = today.getMonth();
 let currentPage = "dashboard";
@@ -101,10 +112,14 @@ function requireState() {
   if (!state) throw new Error("Os dados ainda não foram carregados.");
 }
 
-async function persist(message = "Alterações salvas neste dispositivo.") {
+async function persist(message = isCloudConfigured ? "Alterações salvas e sincronizadas." : "Alterações salvas neste dispositivo.") {
   requireState();
   try {
-    await saveState(database, state);
+    if (isCloudConfigured) {
+      cloudVersion = await saveCloudState(session.user.id, state, cloudVersion);
+    } else {
+      await saveState(database, state);
+    }
     lastPersistedState = structuredClone(state);
   } catch (error) {
     if (lastPersistedState) {
@@ -316,7 +331,7 @@ function investmentsView() {
 
 function dataView() {
   const imported = state.transactions.filter((record) => record.sourceFingerprint).length;
-  return `<section class="page-heading"><div><p class="eyebrow">Privacidade e portabilidade</p><h1>Dados e backup</h1><p>Seus registros ficam neste navegador. Nada é enviado para uma conta, servidor ou API.</p></div></section>
+  return `<section class="page-heading"><div><p class="eyebrow">Privacidade e portabilidade</p><h1>Dados e backup</h1><p>${isCloudConfigured ? "Seus registros são sincronizados com a sua conta (Supabase) e protegidos por login." : "Seus registros ficam neste navegador. Nada é enviado para uma conta, servidor ou API."}</p></div></section>
     <section class="data-grid">
       <article class="panel data-panel"><div class="panel-heading"><div><p class="eyebrow">Histórico da planilha</p><h2>Importar arquivo Excel</h2><p>Importe a planilha contábil ou um XLSX de movimentações exportado pelo Contabtech.</p></div></div>
         <form id="workbook-form" class="stack-form"><label class="file-picker" for="workbookFile"><span class="file-picker-icon" aria-hidden="true">⇧</span><span><strong>Escolha um arquivo .xlsx</strong><small>O arquivo é lido localmente no navegador.</small></span><input id="workbookFile" name="workbook" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" /></label>
@@ -369,12 +384,12 @@ function render() {
     <aside class="sidebar">
       <a class="brand" href="#" data-action="navigate" data-page="dashboard"><span class="brand-mark" aria-hidden="true">C</span><span><strong>contabtech</strong><small>finanças pessoais</small></span></a>
       <nav class="primary-nav" aria-label="Navegação principal">${navigation}</nav>
-      <div class="sidebar-bottom"><div class="offline-badge"><i></i><span>Dados somente neste dispositivo</span></div></div>
+      <div class="sidebar-bottom"><div class="offline-badge"><i></i><span>${isCloudConfigured ? `Sincronizado · ${esc(session?.user?.email || "")}` : "Dados somente neste dispositivo"}</span></div>${isCloudConfigured ? '<button class="button button-compact button-secondary" data-action="sign-out">Sair</button>' : ""}</div>
     </aside>
     <main class="main-area">
-      <header class="topbar"><div class="period-control"><button class="icon-button period-arrow" data-action="previous-month" aria-label="Mês anterior">‹</button><label class="visually-hidden" for="monthSelect">Mês</label><select id="monthSelect">${MONTHS.map((month, index) => `<option value="${index}" ${index === selectedMonth ? "selected" : ""}>${month}</option>`).join("")}</select><label class="visually-hidden" for="yearSelect">Ano</label><input id="yearSelect" type="number" min="1900" max="2200" value="${selectedYear}" aria-label="Ano selecionado" /><button class="icon-button period-arrow" data-action="next-month" aria-label="Próximo mês">›</button></div><div class="topbar-right"><span class="privacy-label"><span aria-hidden="true">●</span> Privado e offline</span><button class="button button-compact button-secondary" data-action="new-transaction">＋ Lançamento</button></div></header>
+      <header class="topbar"><div class="period-control"><button class="icon-button period-arrow" data-action="previous-month" aria-label="Mês anterior">‹</button><label class="visually-hidden" for="monthSelect">Mês</label><select id="monthSelect">${MONTHS.map((month, index) => `<option value="${index}" ${index === selectedMonth ? "selected" : ""}>${month}</option>`).join("")}</select><label class="visually-hidden" for="yearSelect">Ano</label><input id="yearSelect" type="number" min="1900" max="2200" value="${selectedYear}" aria-label="Ano selecionado" /><button class="icon-button period-arrow" data-action="next-month" aria-label="Próximo mês">›</button></div><div class="topbar-right"><span class="privacy-label"><span aria-hidden="true">●</span> ${isCloudConfigured ? "Sincronizado entre dispositivos" : "Privado e offline"}</span><button class="button button-compact button-secondary" data-action="new-transaction">＋ Lançamento</button></div></header>
       <div class="content-area">${pageContent()}</div>
-      <footer class="site-footer"><span>Contabtech · seus dados não saem deste dispositivo</span><button class="text-button" data-action="navigate" data-page="data">Backup e privacidade</button></footer>
+      <footer class="site-footer"><span>${isCloudConfigured ? "Contabtech · dados sincronizados na sua conta" : "Contabtech · seus dados não saem deste dispositivo"}</span><button class="text-button" data-action="navigate" data-page="data">Backup e privacidade</button></footer>
     </main>
   </div>
   <dialog id="formDialog" class="form-dialog"></dialog>
@@ -474,6 +489,14 @@ async function handleAction(event) {
         state[collection] = state[collection].filter((item) => item.id !== record.id);
         await persist("Registro excluído.");
       }
+      return;
+    }
+    if (action === "sign-out") {
+      await signOut();
+      session = null;
+      state = null;
+      cloudVersion = null;
+      renderLogin();
       return;
     }
     if (action === "export-backup") {
@@ -934,22 +957,111 @@ function downloadFile(name, content, type) {
   URL.revokeObjectURL(url);
 }
 
+function registerServiceWorker() {
+  if (import.meta.env.PROD && "serviceWorker" in navigator) {
+    navigator.serviceWorker.register("./sw.js").catch((error) => {
+      console.error("Falha ao habilitar o modo offline:", error);
+      showToast(`Modo offline indisponível: ${error.message}`, "error");
+    });
+  }
+}
+
+function renderLogin(message = "") {
+  app.innerHTML = `<main class="fatal-error"><span class="brand-mark">C</span><h1>Entrar no Contabtech</h1><p>Entre para sincronizar seus dados entre dispositivos.</p>
+    <form id="login-form" class="stack-form">
+      <label>E-mail<input name="email" type="email" autocomplete="email" required /></label>
+      <label>Senha<input name="password" type="password" minlength="8" autocomplete="current-password" required /></label>
+      <p id="login-message" class="error-copy" role="alert">${esc(message)}</p>
+      <button class="button button-primary" type="submit" name="mode" value="signin">Entrar</button>
+      <button class="button button-secondary" type="submit" name="mode" value="signup">Criar conta</button>
+    </form></main><div id="toast" class="toast" role="status" aria-live="polite"></div>`;
+  app.querySelector("#login-form").addEventListener("submit", handleLogin);
+}
+
+async function handleLogin(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const data = new FormData(form);
+  const email = String(data.get("email")).trim();
+  const password = String(data.get("password"));
+  const message = form.querySelector("#login-message");
+  form.querySelectorAll("button").forEach((button) => (button.disabled = true));
+  try {
+    session = event.submitter?.value === "signup" ? await signUp(email, password) : await signIn(email, password);
+    if (!session) {
+      message.textContent = "Conta criada. Confirme o e-mail recebido e depois entre.";
+      form.querySelectorAll("button").forEach((button) => (button.disabled = false));
+      return;
+    }
+    await startCloudSession();
+    render();
+  } catch (error) {
+    message.textContent = error instanceof Error ? error.message : "Não foi possível entrar.";
+    form.querySelectorAll("button").forEach((button) => (button.disabled = false));
+  }
+}
+
+async function startCloudSession() {
+  const cloud = await loadCloudState();
+  if (cloud) {
+    state = normalizeState(cloud.value);
+    cloudVersion = cloud.version;
+  } else {
+    // Primeiro acesso: leva para a nuvem os dados que já existiam neste aparelho.
+    let local = null;
+    try {
+      database = await openDatabase();
+      local = await loadState(database);
+    } catch (error) {
+      console.error("Dados locais indisponíveis para migração:", error);
+    }
+    state = normalizeState(local);
+    cloudVersion = await saveCloudState(session.user.id, state, null);
+  }
+  lastPersistedState = structuredClone(state);
+}
+
+async function refreshFromCloud() {
+  if (!isCloudConfigured || !session || !state || document.querySelector("dialog[open]")) return;
+  try {
+    const cloud = await loadCloudState();
+    if (cloud && cloud.version !== cloudVersion) {
+      state = normalizeState(cloud.value);
+      cloudVersion = cloud.version;
+      lastPersistedState = structuredClone(state);
+      render();
+      showToast("Dados atualizados com as alterações de outro dispositivo.");
+    }
+  } catch (error) {
+    console.error(error);
+  }
+}
+
 async function initialize() {
   try {
+    if (isCloudConfigured) {
+      session = await getSession();
+      registerServiceWorker();
+      if (!session) {
+        renderLogin();
+        return;
+      }
+      await startCloudSession();
+      render();
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") refreshFromCloud();
+      });
+      return;
+    }
     database = await openDatabase();
     const saved = await loadState(database);
     state = normalizeState(saved);
     if (!saved) await saveState(database, state);
     lastPersistedState = structuredClone(state);
     render();
-    if (import.meta.env.PROD && "serviceWorker" in navigator) {
-      navigator.serviceWorker.register("./sw.js").catch((error) => {
-        console.error("Falha ao habilitar o modo offline:", error);
-        showToast(`Modo offline indisponível: ${error.message}`, "error");
-      });
-    }
+    registerServiceWorker();
   } catch (error) {
-    app.innerHTML = `<main class="fatal-error"><span class="brand-mark">C</span><h1>Não foi possível abrir os dados locais</h1><p>${esc(error instanceof Error ? error.message : "Erro inesperado no armazenamento deste navegador.")}</p><p>Seus dados não foram apagados. Verifique a disponibilidade de IndexedDB e recarregue o aplicativo.</p></main>`;
+    app.innerHTML = `<main class="fatal-error"><span class="brand-mark">C</span><h1>${isCloudConfigured ? "Não foi possível carregar seus dados" : "Não foi possível abrir os dados locais"}</h1><p>${esc(error instanceof Error ? error.message : "Erro inesperado no armazenamento deste navegador.")}</p><p>${isCloudConfigured ? "Seus dados não foram apagados. Verifique sua conexão e recarregue o aplicativo." : "Seus dados não foram apagados. Verifique a disponibilidade de IndexedDB e recarregue o aplicativo."}</p></main>`;
     console.error(error);
   }
 }

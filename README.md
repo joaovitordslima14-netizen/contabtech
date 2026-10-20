@@ -56,6 +56,17 @@ Instale e abra o app uma vez com internet para que ele seja guardado para uso of
 - Depois do primeiro carregamento, o service worker mantém a interface em cache para uso offline. Os dados ficam no perfil do navegador de cada dispositivo. O computador não precisa permanecer ligado depois que o aplicativo estiver instalado.
 - Não há sincronização entre aparelhos. Use o backup XLSX para transferir ou recuperar dados. O backup contém informações financeiras e deve ser guardado em local privado.
 
+## Sincronização entre dispositivos (Supabase)
+
+Sem configuração, o app funciona só com os dados locais do aparelho. Para sincronizar:
+
+1. Crie um projeto gratuito em supabase.com e execute [`supabase/schema.sql`](supabase/schema.sql) no **SQL Editor**. As regras RLS garantem que cada usuário acesse apenas os próprios dados.
+2. Em **Authentication → Providers → Email**, mantenha e-mail/senha habilitado (desative a confirmação por e-mail se preferir entrar direto após criar a conta).
+3. Copie a **URL do projeto** e a chave **anon/publishable** (nunca use a `service_role`) de **Project Settings → API**.
+4. Localmente, crie `.env.local` a partir de [`.env.example`](.env.example). No GitHub, em **Settings → Secrets and variables → Actions → Variables**, crie `VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON_KEY` e rode o workflow de publicação.
+
+Com a sincronização ativa, o app exige login e exige internet; os dados ficam na sua conta Supabase. No primeiro login, os dados já existentes no aparelho são enviados para a nuvem. Se outro dispositivo alterar os dados, o app avisa e recarrega na próxima vez que a aba ficar visível, evitando sobrescrever alterações.
+
 ## Importar a planilha
 
 1. Abra **Dados e backup → Importar arquivo Excel**.
