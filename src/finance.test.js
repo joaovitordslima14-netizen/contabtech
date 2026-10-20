@@ -70,12 +70,15 @@ test("inclui parcelas no gráfico de formas sem somá-las às saídas ou ao sald
     paymentMethod: "Pix",
     installmentAmountCents: 25000,
   });
-  state.invoices.push({ id: "invoice", period: "2026-10", brand: "Cartão", amountCents: 9000 });
+  state.invoices.push({ id: "invoice", period: "2026-10", brand: "Cartão", paymentMethod: "Crédito", amountCents: 9000 });
 
   const summary = getMonthSummary(state, "2026-10");
   assert.equal(summary.expenseCents, 1170);
   assert.equal(summary.balanceCents, -1170);
-  assert.deepEqual(summary.paymentMethods, [{ label: "Pix", valueCents: 26170 }]);
+  assert.deepEqual(summary.paymentMethods, [
+    { label: "Pix", valueCents: 26170 },
+    { label: "Crédito", valueCents: 9000 },
+  ]);
   assert.deepEqual(summary.cardBrands, [{ label: "Cartão", valueCents: 9000 }]);
 });
 

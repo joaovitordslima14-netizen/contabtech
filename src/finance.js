@@ -161,27 +161,24 @@ export function getMonthSummary(state, period) {
   for (const expense of expenses) {
     const category = expense.category || "Sem categoria";
     categories.set(category, (categories.get(category) || 0) + expense.amountCents);
-    if (expense.paymentMethod) {
-      paymentMethods.set(
-        expense.paymentMethod,
-        (paymentMethods.get(expense.paymentMethod) || 0) + expense.amountCents,
-      );
-    }
+    const method = expense.paymentMethod || "Sem forma informada";
+    paymentMethods.set(method, (paymentMethods.get(method) || 0) + expense.amountCents);
   }
 
   for (const debt of debts) {
-    if (!debt.paymentMethod || !debt.installmentAmountCents) continue;
-    // A parcela paga já aparece como saída vinculada; evita contá-la duas vezes.
-    if (state.transactions.some((record) => record.linkedId === debt.id)) continue;
-    paymentMethods.set(
-      debt.paymentMethod,
-      (paymentMethods.get(debt.paymentMethod) || 0) + debt.installmentAmountCents,
-    );
+    if (!debt.installmentAmountCents) continue;
+    // Parcela paga já aparece como saída vinculada no mesmo mês; evita contá-la duas vezes.
+    if (transactions.some((record) => record.linkedId === debt.id)) continue;
+    const method = debt.paymentMethod || "Sem forma informada";
+    paymentMethods.set(method, (paymentMethods.get(method) || 0) + debt.installmentAmountCents);
   }
 
   for (const invoice of invoices) {
     if (!invoice.brand) continue;
     cardBrands.set(invoice.brand, (cardBrands.get(invoice.brand) || 0) + invoice.amountCents);
+    if (!invoice.amountCents || transactions.some((record) => record.linkedId === invoice.id)) continue;
+    const method = invoice.paymentMethod || "Sem forma informada";
+    paymentMethods.set(method, (paymentMethods.get(method) || 0) + invoice.amountCents);
   }
 
   const incomeCents = sumCents(incomes);

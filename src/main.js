@@ -276,7 +276,7 @@ function dashboardView() {
   </section>
   <section class="chart-grid">
     <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Categorias</p><h2>Gastos por categoria</h2><p>Inclui despesas fixas mesmo quando ainda não pagas, como no gráfico original.</p></div></div>${progressBars(categories)}</article>
-    <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Pagamentos</p><h2>Gastos e parcelas por forma</h2><p>Parcelas informativas aparecem aqui, mas não são somadas às saídas do mês.</p></div></div>${progressBars(payments)}</article>
+    <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Pagamentos</p><h2>Gastos e parcelas por forma</h2><p>Faturas e parcelas informativas aparecem aqui pela forma de pagamento, mas não são somadas às saídas do mês.</p></div></div>${progressBars(payments)}</article>
   </section>
   <section class="chart-grid">
     <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Cartões</p><h2>Faturas por bandeira</h2><p>Informativas: não alteram o saldo nem as saídas.</p></div></div>${progressBars(summary.cardBrands)}</article>
