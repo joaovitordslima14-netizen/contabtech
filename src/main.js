@@ -8,6 +8,7 @@ import {
   MONTHS,
   PAYMENT_METHODS,
   amountToCents,
+  createFutureDebtInstallments,
   emptyState,
   formatMoney,
   getMonthSummary,
@@ -707,7 +708,20 @@ async function handleSupplementSubmit(event) {
     } else {
       const installmentAmountCents = amountToCents(data.get("installmentAmount") || "0");
       const totalAmountCents = amountToCents(data.get("totalAmount") || "0");
+      const currentInstallment = Number(data.get("currentInstallment")) || 0;
+      const totalInstallments = Number(data.get("totalInstallments")) || 0;
       if (installmentAmountCents < 0 || totalAmountCents < 0) throw new Error("Os valores não podem ser negativos.");
+      if (
+        !Number.isInteger(currentInstallment) ||
+        !Number.isInteger(totalInstallments) ||
+        currentInstallment < 0 ||
+        totalInstallments < 0 ||
+        (currentInstallment > 0 && totalInstallments === 0) ||
+        (totalInstallments > 0 && currentInstallment === 0) ||
+        currentInstallment > totalInstallments
+      ) {
+        throw new Error("Informe uma parcela atual e um total de parcelas válidos.");
+      }
       record = {
         ...(existing || {}),
         id: existing?.id || crypto.randomUUID(),
@@ -717,8 +731,8 @@ async function handleSupplementSubmit(event) {
         paymentMethod: String(data.get("paymentMethod") || ""),
         installmentAmountCents,
         totalAmountCents,
-        currentInstallment: Number(data.get("currentInstallment")) || 0,
-        totalInstallments: Number(data.get("totalInstallments")) || 0,
+        currentInstallment,
+        totalInstallments,
         date: String(data.get("date") || ""),
         paid: data.get("paid") === "on",
       };
@@ -728,7 +742,17 @@ async function handleSupplementSubmit(event) {
     delete record.source;
     delete record.sourceFingerprint;
     if (existing) state[collection] = state[collection].map((item) => (item.id === id ? record : item));
-    else state[collection].push(record);
+    else {
+      state[collection].push(record);
+      if (kind === "debt") {
+        state.debts.push(
+          ...createFutureDebtInstallments(record).map((installment) => ({
+            ...installment,
+            id: crypto.randomUUID(),
+          })),
+        );
+      }
+    }
     const payment = syncPaymentTransaction(state, kind, record, todayString());
     await persist(
       payment && !existing?.paid

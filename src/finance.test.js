@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   amountToCents,
+  createFutureDebtInstallments,
   emptyState,
   formatMoney,
   getMonthSummary,
@@ -92,4 +93,47 @@ test("separa períodos com o mesmo mês em anos diferentes", () => {
   assert.equal(getMonthSummary(state, "2025-10").incomeCents, 100);
   assert.equal(getMonthSummary(state, "2026-10").incomeCents, 200);
   assert.equal(getYearSummary(state, 2026).incomeCents, 200);
+});
+
+test("cria as parcelas futuras nos meses seguintes, inclusive na virada do ano", () => {
+  const futureInstallments = createFutureDebtInstallments({
+    id: "debt",
+    period: "2026-11",
+    date: "2026-11-30",
+    creditor: "Loja",
+    currentInstallment: 1,
+    totalInstallments: 3,
+    installmentAmountCents: 5000,
+    paid: true,
+  });
+
+  assert.deepEqual(
+    futureInstallments.map(({ period, date, currentInstallment, totalInstallments, paid }) => ({
+      period,
+      date,
+      currentInstallment,
+      totalInstallments,
+      paid,
+    })),
+    [
+      { period: "2026-12", date: "2026-12-30", currentInstallment: 2, totalInstallments: 3, paid: false },
+      { period: "2027-01", date: "2027-01-30", currentInstallment: 3, totalInstallments: 3, paid: false },
+    ],
+  );
+  assert.equal(futureInstallments[0].installmentAmountCents, 5000);
+});
+
+test("ajusta o dia ao último dia do mês e não gera parcelas sem parcela futura", () => {
+  const [futureInstallment] = createFutureDebtInstallments({
+    period: "2026-01",
+    date: "2026-01-31",
+    currentInstallment: 1,
+    totalInstallments: 2,
+  });
+  assert.equal(futureInstallment.period, "2026-02");
+  assert.equal(futureInstallment.date, "2026-02-28");
+  assert.deepEqual(
+    createFutureDebtInstallments({ period: "2026-01", currentInstallment: 3, totalInstallments: 3 }),
+    [],
+  );
 });

@@ -98,6 +98,50 @@ export function periodOf(record) {
   return typeof record.date === "string" ? record.date.slice(0, 7) : "";
 }
 
+export function createFutureDebtInstallments(record) {
+  const currentInstallment = Number(record.currentInstallment);
+  const totalInstallments = Number(record.totalInstallments);
+  if (
+    !Number.isInteger(currentInstallment) ||
+    !Number.isInteger(totalInstallments) ||
+    currentInstallment < 1 ||
+    totalInstallments <= currentInstallment
+  ) {
+    return [];
+  }
+
+  const [year, month] = record.period.split("-").map(Number);
+  const dateDay = /^\d{4}-\d{2}-\d{2}$/.test(record.date || "")
+    ? Number(record.date.slice(-2))
+    : null;
+
+  return Array.from({ length: totalInstallments - currentInstallment }, (_, index) => {
+    const installmentNumber = currentInstallment + index + 1;
+    const installmentDate = new Date(Date.UTC(year, month - 1 + index + 1, 1));
+    const installmentPeriod = `${installmentDate.getUTCFullYear()}-${String(
+      installmentDate.getUTCMonth() + 1,
+    ).padStart(2, "0")}`;
+    const date = dateDay
+      ? `${installmentPeriod}-${String(
+          Math.min(
+            dateDay,
+            new Date(Date.UTC(installmentDate.getUTCFullYear(), installmentDate.getUTCMonth() + 1, 0)).getUTCDate(),
+          ),
+        ).padStart(2, "0")}`
+      : record.date;
+
+    const installment = {
+      ...record,
+      period: installmentPeriod,
+      currentInstallment: installmentNumber,
+      date,
+      paid: false,
+    };
+    delete installment.id;
+    return installment;
+  });
+}
+
 export function sumCents(items, select = (item) => item.amountCents) {
   return items.reduce((sum, item) => sum + (Number(select(item)) || 0), 0);
 }
