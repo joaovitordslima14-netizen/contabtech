@@ -741,16 +741,16 @@ async function handleSupplementSubmit(event) {
 
     delete record.source;
     delete record.sourceFingerprint;
+    if (kind === "debt") record.seriesId = record.seriesId || crypto.randomUUID();
     if (existing) state[collection] = state[collection].map((item) => (item.id === id ? record : item));
-    else {
-      state[collection].push(record);
-      if (kind === "debt") {
-        state.debts.push(
-          ...createFutureDebtInstallments(record).map((installment) => ({
-            ...installment,
-            id: crypto.randomUUID(),
-          })),
+    else state[collection].push(record);
+    if (kind === "debt") {
+      for (const installment of createFutureDebtInstallments(record)) {
+        const sibling = state.debts.find(
+          (item) => item.seriesId === record.seriesId && item.period === installment.period,
         );
+        if (!sibling) state.debts.push({ ...installment, id: crypto.randomUUID() });
+        else if (!sibling.paid) Object.assign(sibling, { ...installment, id: sibling.id });
       }
     }
     const payment = syncPaymentTransaction(state, kind, record, todayString());
